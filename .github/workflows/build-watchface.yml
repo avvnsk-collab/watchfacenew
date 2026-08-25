@@ -1,0 +1,61 @@
+name: Build Amazfit Balance 2 watchface
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'amg_petronas_Balance_2_reference_match_source.zip'
+      - '.github/workflows/build-watchface.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Zeus CLI
+        run: npm install -g @zeppos/zeus-cli
+
+      - name: Unpack source
+        run: |
+          rm -rf build-src
+          mkdir build-src
+          unzip -q amg_petronas_Balance_2_reference_match_source.zip -d build-src
+
+      - name: Build watchface
+        working-directory: build-src
+        run: zeus build
+
+      - name: Collect install package
+        run: |
+          mkdir -p release
+          find build-src/dist -type f -maxdepth 2 -print
+          pkg=$(find build-src/dist -type f \( -name '*.zab' -o -name '*.zpk' \) | head -n 1)
+          if [ -z "$pkg" ]; then
+            echo 'No .zab or .zpk package produced by zeus build' >&2
+            exit 1
+          fi
+          ext="${pkg##*.}"
+          cp "$pkg" "release/amg_petronas_Balance_2.$ext"
+
+      - name: Commit install package
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add release/
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+          else
+            git commit -m 'Build Balance 2 watchface package'
+            git push
+          fi
