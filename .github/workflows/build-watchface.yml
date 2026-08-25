@@ -36,26 +36,64 @@ jobs:
         working-directory: build-src
         run: zeus build
 
-      - name: Collect install package
+      - name: Collect ZAB and extract ZPK packages
         run: |
-          mkdir -p release
-          find build-src/dist -type f -maxdepth 2 -print
-          pkg=$(find build-src/dist -type f \( -name '*.zab' -o -name '*.zpk' \) | head -n 1)
-          if [ -z "$pkg" ]; then
-            echo 'No .zab or .zpk package produced by zeus build' >&2
+          rm -rf release-new zab-unpacked
+          mkdir -p release-new zab-unpacked
+          zab=$(find build-src/dist -type f -name '*.zab' | head -n 1)
+          if [ -z "$zab" ]; then
+            echo 'No .zab package produced by zeus build' >&2
             exit 1
           fi
-          ext="${pkg##*.}"
-          cp "$pkg" "release/amg_petronas_Balance_2.$ext"
+          cp "$zab" release-new/amg_petronas_Balance_2.zab
+          echo 'ZAB contents:'
+          unzip -l "$zab" || true
+          unzip -q "$zab" -d zab-unpacked
+          echo 'Extracted files:'
+          find zab-unpacked -type f -print
+          mapfile -t zpks < <(find zab-unpacked -type f -name '*.zpk' | sort)
+          if [ "${#zpks[@]}" -eq 0 ]; then
+            echo 'No .zpk packages found inside ZAB' >&2
+            exit 1
+          fi
+          i=1
+          for zpk in "${zpks[@]}"; do
+            base=$(basename "$zpk")
+            safe=$(printf '%s' "$base" | tr ' ' '_' | tr -cd 'A-Za-z0-9._-')
+            cp "$zpk" "release-new/${i}_${safe}"
+            i=$((i+1))
+          done
 
-      - name: Commit install package
+      - name: Generate Zepp install QR codes
         run: |
+          python -m pip install --quiet qrcode[pil]
+          python - <<'PY'
+          from pathlib import Path
+          import qrcode
+          owner='avvnsk-collab'
+          repo='watchfacenew'
+          branch='main'
+          folder=Path('release-new')
+          for p in sorted(folder.glob('*.zpk')):
+              https=f'https://raw.githubusercontent.com/{owner}/{repo}/{branch}/release/{p.name}'
+              zepp='zpkd1://' + https.removeprefix('https://')
+              img=qrcode.make(zepp)
+              out=folder/(p.stem + '_QR.png')
+              img.save(out)
+              (folder/(p.stem + '_INSTALL.txt')).write_text(zepp+'\n', encoding='utf-8')
+              print(p.name, zepp)
+          PY
+
+      - name: Publish install files
+        run: |
+          rm -rf release
+          mv release-new release
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add release/
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
-            git commit -m 'Build Balance 2 watchface package'
+            git commit -m 'Build Balance 2 install packages and QR codes'
             git push
           fi
