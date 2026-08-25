@@ -1,1 +1,0 @@
-zpkd1://raw.githubusercontent.com/avvnsk-collab/watchfacenew/main/release/1_47ecee714fe857866baf6e70110efcad.zpk
