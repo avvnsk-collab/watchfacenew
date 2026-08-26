@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: balance2-watchface-build
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,75 +28,128 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Zeus CLI
-        run: npm install -g @zeppos/zeus-cli
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Unpack source
+      - name: Install build dependencies
         run: |
+          npm install -g @zeppos/zeus-cli
+          python -m pip install --quiet pillow qrcode[pil]
+
+      - name: Unpack approved source
+        run: |
+          set -euo pipefail
           rm -rf build-src
           mkdir build-src
           unzip -q amg_petronas_Balance_2_reference_match_source.zip -d build-src
 
-      - name: Add clock tap zones
-        run: python tools/add_clock_taps.py
-
-      - name: Normalize PNG resources for Zeus
+      - name: Validate project structure
         run: |
-          python -m pip install --quiet pillow
+          set -euo pipefail
+          test -f build-src/app.json
+          test -f build-src/watchface/index.js
+          test -d build-src/assets
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          app = Path('build-src/app.json')
+          data = json.loads(app.read_text(encoding='utf-8'))
+          if 'app' not in data:
+              raise SystemExit('app.json: missing app section')
+          if not Path('build-src/watchface/index.js').read_text(encoding='utf-8').strip():
+              raise SystemExit('watchface/index.js is empty')
+          print('Project structure OK')
+          PY
+
+      - name: Apply approved clock tap zones
+        run: |
+          set -euo pipefail
+          python tools/add_clock_taps.py
+          grep -q 'BALANCE2_CLOCK_TAP_ZONES' build-src/watchface/index.js
+          grep -q 'ALARM_CLOCK' build-src/watchface/index.js
+          grep -q 'COUNT_DOWN' build-src/watchface/index.js
+          grep -q 'STOP_WATCH' build-src/watchface/index.js
+
+      - name: Normalize PNG resources
+        run: |
+          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           from PIL import Image
 
+          count = 0
           for p in Path('build-src/assets').rglob('*.png'):
-              try:
-                  im = Image.open(p)
-                  if im.mode in ('L', 'LA', 'P'):
-                      im = im.convert('RGBA')
-                  elif im.mode != 'RGBA':
+              with Image.open(p) as im:
+                  if im.mode != 'RGBA':
                       im = im.convert('RGBA')
                   im.save(p, format='PNG')
-                  print('normalized', p, im.size)
-              except Exception as e:
-                  print('skip', p, e)
+              count += 1
+          if count == 0:
+              raise SystemExit('No PNG assets found')
+          print(f'Normalized {count} PNG files')
           PY
 
-      - name: Build watchface
+      - name: Build watchface with Zeus
         working-directory: build-src
-        run: zeus build
-
-      - name: Collect stable install package
         run: |
+          set -euo pipefail
+          zeus build
+
+      - name: Validate and collect packages
+        run: |
+          set -euo pipefail
           rm -rf release-new zab-unpacked
           mkdir -p release-new zab-unpacked
-          zab=$(find build-src/dist -type f -name '*.zab' | head -n 1)
-          if [ -z "$zab" ]; then
-            echo 'No .zab package produced by zeus build' >&2
-            exit 1
-          fi
+
+          zab=$(find build-src/dist -type f -name '*.zab' -print -quit)
+          test -n "$zab"
+          test -s "$zab"
           cp "$zab" release-new/amg_petronas_Balance_2.zab
+
           unzip -q "$zab" -d zab-unpacked
-          zpk=$(find zab-unpacked -type f -name '*.zpk' | head -n 1)
-          if [ -z "$zpk" ]; then
-            echo 'No .zpk package found inside ZAB' >&2
-            exit 1
-          fi
+          zpk=$(find zab-unpacked -type f -name '*.zpk' -print -quit)
+          test -n "$zpk"
+          test -s "$zpk"
           cp "$zpk" release-new/amg_petronas_Balance_2.zpk
 
-      - name: Generate stable Zepp install QR
+          unzip -t release-new/amg_petronas_Balance_2.zab >/dev/null
+          echo "ZAB size: $(stat -c%s release-new/amg_petronas_Balance_2.zab)"
+          echo "ZPK size: $(stat -c%s release-new/amg_petronas_Balance_2.zpk)"
+
+      - name: Create package checksums
         run: |
-          python -m pip install --quiet qrcode[pil]
+          set -euo pipefail
+          cd release-new
+          sha256sum amg_petronas_Balance_2.zab amg_petronas_Balance_2.zpk > SHA256SUMS.txt
+
+      - name: Generate install helper files
+        run: |
+          set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           import qrcode
-          zepp='zpkd1://raw.githubusercontent.com/avvnsk-collab/watchfacenew/main/release/amg_petronas_Balance_2.zpk'
-          folder=Path('release-new')
-          qrcode.make(zepp).save(folder/'amg_petronas_Balance_2_QR.png')
-          (folder/'amg_petronas_Balance_2_INSTALL.txt').write_text(zepp+'\n', encoding='utf-8')
-          print(zepp)
+          payload = 'zpkd1://raw.githubusercontent.com/avvnsk-collab/watchfacenew/main/release/amg_petronas_Balance_2.zpk'
+          folder = Path('release-new')
+          qrcode.make(payload).save(folder/'amg_petronas_Balance_2_QR.png')
+          (folder/'amg_petronas_Balance_2_INSTALL.txt').write_text(payload+'\n', encoding='utf-8')
           PY
 
-      - name: Publish install files
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amazfit-balance-2-amg-petronas
+          path: |
+            release-new/amg_petronas_Balance_2.zab
+            release-new/amg_petronas_Balance_2.zpk
+            release-new/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish verified build
         run: |
+          set -euo pipefail
           git fetch origin main
           git reset --hard origin/main
           mkdir -p release
@@ -100,12 +157,14 @@ jobs:
           cp -f release-new/amg_petronas_Balance_2.zpk release/amg_petronas_Balance_2.zpk
           cp -f release-new/amg_petronas_Balance_2_QR.png release/amg_petronas_Balance_2_QR.png
           cp -f release-new/amg_petronas_Balance_2_INSTALL.txt release/amg_petronas_Balance_2_INSTALL.txt
+          cp -f release-new/SHA256SUMS.txt release/SHA256SUMS.txt
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add release/amg_petronas_Balance_2.zab release/amg_petronas_Balance_2.zpk release/amg_petronas_Balance_2_QR.png release/amg_petronas_Balance_2_INSTALL.txt
+          git add release/amg_petronas_Balance_2.zab release/amg_petronas_Balance_2.zpk release/amg_petronas_Balance_2_QR.png release/amg_petronas_Balance_2_INSTALL.txt release/SHA256SUMS.txt
           if git diff --cached --quiet; then
-            echo 'No changes to commit'
+            echo 'No release changes to commit'
           else
-            git commit -m 'Build Balance 2 with clock tap zones'
+            git commit -m 'Build verified Balance 2 AMG Petronas watchface'
             git push origin HEAD:main
           fi
