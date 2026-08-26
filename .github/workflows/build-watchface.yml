@@ -89,16 +89,19 @@ jobs:
 
       - name: Publish install files
         run: |
-          rm -rf release
-          mv release-new release
+          git fetch origin main
+          git reset --hard origin/main
+          mkdir -p release
+          cp -f release-new/amg_petronas_Balance_2.zab release/amg_petronas_Balance_2.zab
+          cp -f release-new/amg_petronas_Balance_2.zpk release/amg_petronas_Balance_2.zpk
+          cp -f release-new/amg_petronas_Balance_2_QR.png release/amg_petronas_Balance_2_QR.png
+          cp -f release-new/amg_petronas_Balance_2_INSTALL.txt release/amg_petronas_Balance_2_INSTALL.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add release/
+          git add release/amg_petronas_Balance_2.zab release/amg_petronas_Balance_2.zpk release/amg_petronas_Balance_2_QR.png release/amg_petronas_Balance_2_INSTALL.txt
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
             git commit -m 'Build Balance 2 stable install package and QR'
-            git fetch origin main
-            git rebase origin/main
             git push origin HEAD:main
           fi
