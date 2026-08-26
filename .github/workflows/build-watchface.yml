@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'amg_petronas_Balance_2_reference_match_source.zip'
+      - 'tools/add_clock_taps.py'
       - '.github/workflows/build-watchface.yml'
   workflow_dispatch:
 
@@ -31,6 +32,9 @@ jobs:
           rm -rf build-src
           mkdir build-src
           unzip -q amg_petronas_Balance_2_reference_match_source.zip -d build-src
+
+      - name: Add clock tap zones
+        run: python tools/add_clock_taps.py
 
       - name: Normalize PNG resources for Zeus
         run: |
@@ -102,6 +106,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
-            git commit -m 'Build Balance 2 stable install package and QR'
+            git commit -m 'Build Balance 2 with clock tap zones'
             git push origin HEAD:main
           fi
